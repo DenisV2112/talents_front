@@ -174,7 +174,7 @@ docker compose up --build
 
 This will start:
 
-- PostgreSQL  
+- MySql 
 - Web Application  
 - API REST  
 
@@ -184,12 +184,12 @@ This will start:
 
 ### Web Application (Admin)
 ```
-http://localhost:5100
+http://localhost:3000
 ```
 
 ### REST API Documentation (Swagger)
 ```
-http://localhost:5200/swagger
+http://localhost:5163/swagger
 ```
 
 ---
