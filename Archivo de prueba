@@ -1,0 +1,289 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { model } from "../config/gemini"
+import "../assets/styles/Home.css"
+
+function Home() {
+  const [query, setQuery] = useState("")
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  // 📊 Estados del Dashboard
+  const [totalEmployees, setTotalEmployees] = useState(0)
+  const [activeEmployees, setActiveEmployees] = useState(0)
+  const [vacationEmployees, setVacationEmployees] = useState(0)
+
+const loadDashboard = async () => {
+  try {
+    const res = await fetch("http://localhost:5163/api/Employees");
+    const allData = await res.json();
+
+    // Total empleados
+    setTotalEmployees(allData.length);
+
+    // Empleados activos (status === "Activo")
+    const active = allData.filter(emp =>
+      emp.status?.toLowerCase().includes("activo")
+    );
+    setActiveEmployees(active.length);
+
+    // Empleados en vacaciones (status === "Vacaciones")
+    const vacation = allData.filter(emp =>
+      emp.status?.toLowerCase().includes("vaca")
+    );
+    setVacationEmployees(vacation.length);
+
+  } catch (err) {
+    console.log("Error cargando estadísticas", err);
+  }
+};
+
+
+  useEffect(() => {
+    loadDashboard()
+  }, [])
+
+  // 🔥 Función que manda la consulta del usuario a la IA
+  const askAI = async (text) => {
+    const prompt = `
+      Eres un asistente que interpreta la consulta del usuario y decides qué tipo de búsqueda ejecutar.
+      
+      Reglas clave para la respuesta JSON:
+      1. Si la consulta pide un solo empleado POR SU ID ÚNICA (primary key), usa:
+         { "type": "id", "value": "dato de la búsqueda" }
+      2. Si la consulta pide una lista de empleados o buscar por un campo que no es la ID (ej: documento, nombre, estatus), usa:
+         El sistema solo permite filtros por los siguientes campos EXACTOS:
+
+        - document
+        - firstName
+        - lastName
+        - email
+        - position
+        - department
+        - status
+
+        Cuando quieras devolver un filtro, debes usar SIEMPRE estos nombres exactos.
+
+        Ejemplos correctos:
+        { "type": "list", "filter": "firstName=Denis" }
+        { "type": "list", "filter": "lastName=Lopez" }
+        { "type": "list", "filter": "email=ejemplo@gmail.com" }
+        { "type": "list", "filter": "status=Activo" }
+
+        Nunca uses campos como: name, nombre, fullName, firstname, lastname, usuario…
+
+      SOLO RESPONDE EN JSON:
+
+      Consulta del usuario:
+      "${text}"
+    `
+
+    const result = await model.generateContent(prompt)
+    const response = await result.response.text()
+
+    try {
+      return JSON.parse(response.replace(/```json|```/g, "").trim())
+    } catch {
+      console.error("Error al parsear la respuesta de la IA:", response)
+      return null
+    }
+  }
+
+
+// 🔍 Buscar usando IA + API (Actualizado para manejar ID vs. Documento)
+ const buscar = async () => {
+    if (!query) return
+    setLoading(true)
+    setError(null)
+    setResults([])
+    
+    // 🚨 PASO DE AUTENTICACIÓN
+    const token = localStorage.getItem('token');
+    if (!token) {
+        setError("Error: Sesión no iniciada (Token JWT requerido).");
+        setLoading(false);
+        return;
+    }
+
+    try {
+      // 1. Preguntar a la IA
+      const aiData = await askAI(query)
+
+      if (!aiData || (!aiData.type && aiData.type !== 'list')) {
+        throw new Error("La IA no pudo interpretar la búsqueda. Intenta con un formato más claro.")
+      }
+      
+      let finalResults = [];
+
+      // --- CAMINO 1: BÚSQUEDA POR LISTA O FILTRO (Incluye Documento) ---
+      if (aiData.type === 'list') {
+          
+          // 2. Si se pide una lista o un filtro, siempre llamamos a la API para obtener TODOS los empleados
+          const url = `http://localhost:5163/api/Employees`;
+
+          console.log(`Pidiendo todos los empleados a: ${url}`);
+          const res = await fetch(url, {
+              headers: {
+                  'Authorization': `Bearer ${token}` 
+              }
+          })
+          
+          if (!res.ok) {
+              throw new Error(`Error ${res.status} al obtener todos los empleados. Verifique la consola.`);
+          }
+          
+          const allData = await res.json()
+          
+          // 3. Aplicar el filtro LOCALMENTE en el frontend
+          if (aiData.filter && aiData.filter !== 'all') {
+              
+              const parts = aiData.filter.split('=');
+              // Manejamos el caso en que el filtro no tenga el formato key=value
+              if (parts.length !== 2) {
+                  throw new Error(`El filtro de la IA no es válido: ${aiData.filter}. Debe ser 'key=value'.`);
+              }
+              const [key, expectedValue] = parts;
+
+              console.log(`Aplicando filtro local: ${key} = ${expectedValue}`);
+              
+              finalResults = allData.filter(emp => {
+                // Comparamos el valor de la propiedad (key) del empleado
+                // Usamos toString() por si el valor es numérico (como el documento)
+                const employeeValue = emp[key];
+                if (employeeValue === undefined || employeeValue === null) return false;
+                
+                return employeeValue.toString().toLowerCase() === expectedValue.toLowerCase();
+              });
+
+          } else {
+              // Si el filtro es 'all', devolvemos todos
+              finalResults = allData;
+          }
+
+          if (finalResults.length === 0) {
+              setError(`No se encontraron empleados que cumplan con el criterio: ${aiData.filter}`);
+          }
+
+      // --- CAMINO 2: BÚSQUEDA POR ID ÚNICA (Ruta API /api/Employees/{id}) ---
+      } else if (aiData.type === 'id') {
+          // Si es una búsqueda por ID única, se usa la ruta {id}
+          if (!aiData.value) {
+            throw new Error(`Falta el valor para el tipo de búsqueda: ${aiData.type}.`);
+          }
+          const endpoint = `${aiData.value}`
+          const url = `http://localhost:5163/api/Employees/${endpoint}`;
+          
+          const res = await fetch(url, {
+              headers: {
+                  'Authorization': `Bearer ${token}`
+              }
+          })
+
+          if (res.status === 404) {
+              setError(`No se encontró el empleado con ID: ${aiData.value}`);
+              return;
+          }
+          
+          if (!res.ok) {
+              throw new Error(`Error ${res.status} en el servidor al buscar por ID. Verifique la consola.`);
+          }
+
+          const data = await res.json()
+          // Convertir el objeto único a un array para la tabla de resultados
+          finalResults = data ? [data] : []; 
+      }
+      
+      // 4. Actualizar Resultados
+      setResults(finalResults) 
+
+    } catch (err) {
+      console.error("Error completo:", err);
+      setError(err.message || "Error desconocido al buscar información.");
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <div className="home-container">
+
+      {/* 🧩 DASHBOARD SUPERIOR */}
+      <div className="stats-container">
+        <div className="stat-card">
+          <h3>Total Empleados</h3>
+          <p>{totalEmployees}</p>
+        </div>
+
+        <div className="stat-card active">
+          <h3>Activos</h3>
+          <p>{activeEmployees}</p>
+        </div>
+
+        <div className="stat-card vacations">
+          <h3>En Vacaciones</h3>
+          <p>{vacationEmployees}</p>
+        </div>
+      </div>
+
+      <div className="page-header">
+        <h1>Inicio</h1>
+        <p>Asistente IA para consulta de empleados</p>
+      </div>
+
+      {/* 🔍 Buscador Inteligente IA */}
+      <div className="search-box">
+        <input
+          type="text"
+          className="search-input"
+          placeholder="Pregúntale a la IA: 'Muéstrame el empleado 1', 'Quién trabaja en IT', 'dame todos los empleados', etc..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="search-btn" onClick={buscar}>
+          Consultar IA
+        </button>
+      </div>
+
+      {loading && <p>Cargando...</p>}
+      {error && <p className="error-message">{error}</p>}
+
+      {/* 📌 Resultados */}
+      {results.length > 0 && (
+        <div className="results-card">
+          <h2>Resultados IA</h2>
+
+          <table className="results-table">
+            <thead>
+              <tr>
+                <th>Documento</th>
+                <th>Nombre</th>
+                <th>Apellido</th>
+                <th>Email</th>
+                <th>Cargo</th>
+                <th>Departamento</th>
+                <th>Estatus</th> {/* Añadimos Estatus para verificar el filtro */}
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((emp) => (
+                <tr key={emp.id}>
+                  <td>{emp.document}</td>
+                  <td>{emp.firstName}</td>
+                  <td>{emp.lastName}</td>
+                  <td>{emp.email}</td>
+                  <td>{emp.position}</td>
+                  <td>{emp.department}</td>
+                  <td>{emp.status}</td> {/* Mostrar estatus */}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+    </div>
+  )
+}
+
+export default Home
