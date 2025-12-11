@@ -251,4 +251,4 @@ dotnet test
 ---
 
 ## Repository Link
-👉 **https://github.com/TuUsuario/TalentoPlus-EmployeeSystem**
+👉 **[https://github.com/TuUsuario/TalentoPlus-EmployeeSystem](https://github.com/DenisV2112/talents_front)**
