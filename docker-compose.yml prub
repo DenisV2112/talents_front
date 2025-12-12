@@ -1,1 +1,33 @@
+version: '3.9'
+
+services:
+  mysql_db:
+    image: mysql:8.0
+    container_name: pruebapi_mysql
+    restart: always
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: PruebApi
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-ppassword"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+
+  pruebapi:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: pruebapi_api
+    restart: always
+    ports:
+      - "5163:5163"
+    depends_on:
+      mysql_db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: "http://0.0.0.0:5163"
+      ConnectionStrings__DefaultConnection: "Server=mysql_db;Port=3306;Database=PruebApi;User=root;Password=password;"
 
